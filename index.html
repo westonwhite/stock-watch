@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow"><title>Stock Watch</title>
+<style>
+:root{--bg:#0f1115;--card:#181b22;--fg:#e8eaed;--mut:#9aa0a6;--g:#34c759;--r:#ff453a;--y:#ffd60a;--o:#ff9f0a;--b:#0a84ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 -apple-system,system-ui,Segoe UI,Roboto,sans-serif}
+#lock{display:flex;min-height:100vh;align-items:center;justify-content:center}
+#lock form{background:var(--card);padding:28px;border-radius:16px;text-align:center;width:min(320px,90vw)}
+#lock input{font-size:28px;letter-spacing:10px;text-align:center;width:100%;padding:10px;border-radius:10px;border:1px solid #333;background:#0b0d11;color:var(--fg);margin:14px 0}
+button{background:var(--b);color:#fff;border:0;border-radius:10px;padding:10px 18px;font-size:16px;width:100%}
+#err{color:var(--r);min-height:1.2em}
+main{max-width:1100px;margin:auto;padding:14px}
+.card{background:var(--card);border-radius:14px;padding:14px 16px;margin-bottom:12px}
+.big{font-size:30px;font-weight:700}.mut{color:var(--mut);font-size:13px}.up{color:var(--g)}.dn{color:var(--r)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+table{width:100%;border-collapse:collapse}th,td{padding:8px 6px;border-bottom:1px solid #262a33;text-align:right;vertical-align:top}
+th{color:var(--mut);font-weight:500;font-size:12px;cursor:pointer;position:sticky;top:0;background:var(--card)}
+td:first-child,th:first-child{text-align:left}
+.tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.Buy{background:#163d22;color:var(--g)}.Hold{background:#3a3412;color:var(--y)}.Sell{background:#40201a;color:var(--o)}.Most{background:#4a1418;color:var(--r)}
+tr.row{cursor:pointer}tr.det td{text-align:left;background:#14171d;font-size:14px}
+tr.det a{color:#8ab4f8;text-decoration:none;display:block;margin:4px 0}
+.filters button{width:auto;padding:6px 12px;font-size:13px;margin:0 6px 6px 0;background:#262a33}
+.filters button.on{background:var(--b)}
+ul{margin:6px 0;padding-left:20px}
+@media(max-width:640px){.hide-sm{display:none}td,th{padding:7px 3px;font-size:13px}.big{font-size:26px}}
+</style></head><body>
+<div id="lock"><form id="f"><div style="font-size:20px;font-weight:600">Stock Watch</div>
+<input id="pin" type="password" inputmode="numeric" autocomplete="current-password" maxlength="8" autofocus placeholder="••••">
+<button>Unlock</button><div id="err"></div></form></div>
+<main id="app" hidden></main>
+<script>
+const $=s=>document.querySelector(s);
+const b64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+const fmt=(n,d=0)=>n==null?'—':n.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+const usd=(n,d=0)=>n==null?'—':(n<0?'-$':'$')+fmt(Math.abs(n),d);
+const pc=n=>n==null?'—':`<span class="${n>=0?'up':'dn'}">${n>=0?'+':''}${n.toFixed(2)}%</span>`;
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function unlock(pin){
+  const e=await (await fetch('data.enc.json?'+Date.now(),{cache:'no-store'})).json();
+  const km=await crypto.subtle.importKey('raw',new TextEncoder().encode(pin),'PBKDF2',false,['deriveKey']);
+  const key=await crypto.subtle.deriveKey({name:'PBKDF2',salt:b64(e.salt),iterations:e.iter,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['decrypt']);
+  const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64(e.iv)},key,b64(e.ct));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+let D,filt='All',sortK='value',sortDir=-1;
+$('#f').onsubmit=async ev=>{ev.preventDefault();$('#err').textContent='Unlocking…';
+  try{D=await unlock($('#pin').value);sessionStorage.setItem('sw',$('#pin').value);$('#lock').remove();$('#app').hidden=false;render();}
+  catch(x){$('#err').textContent='Wrong PIN';$('#pin').value='';}};
+const saved=sessionStorage.getItem('sw');if(saved){$('#pin').value=saved;$('#f').requestSubmit();}
+function render(){
+  const s=D.summary||{},gain=D.total-D.cost,cnt={};D.rows.forEach(r=>cnt[r.rating]=(cnt[r.rating]||0)+1);
+  const asof=new Date(D.asof).toLocaleString('en-US',{timeZone:'America/New_York',dateStyle:'medium',timeStyle:'short'})+' ET';
+  let rows=D.rows.filter(r=>filt==='All'||r.rating===filt);
+  rows.sort((a,b)=>{let x=a[sortK],y=b[sortK];if(typeof x==='string')return sortDir*x.localeCompare(y);return sortDir*((x??-1e18)-(y??-1e18));});
+  $('#app').innerHTML=`
+  <div class="card"><div class="mut">Total value · updated ${asof}${D.rated_on?' · ratings '+D.rated_on:''}</div>
+   <div class="big">${usd(D.total)}</div>
+   <div class="grid" style="margin-top:8px">
+    <div><div class="mut">Today</div><b class="${D.day_usd>=0?'up':'dn'}">${D.day_usd>=0?'+':''}${usd(D.day_usd)}</b></div>
+    <div><div class="mut">Gain vs cost</div><b class="${gain>=0?'up':'dn'}">${gain>=0?'+':''}${usd(gain)}</b></div>
+    <div><div class="mut">Holdings</div><b>${D.rows.length}</b></div>
+    <div><div class="mut">Ratings</div><b><span class="up">${cnt.Buy||0} Buy</span> · ${cnt.Hold||0} Hold · <span class="dn">${(cnt.Sell||0)+(cnt['Most worrisome']||0)} Sell/Worry</span></b></div>
+   </div></div>
+  ${s.headline?`<div class="card">${esc(s.headline)}</div>`:''}
+  <div class="grid">
+   <div class="card"><b>⚠️ Biggest risks</b><ul>${(s.risks||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>
+   <div class="card"><b>✅ Top recommendation</b><p style="margin:6px 0">${esc(s.top_pick||'')}</p></div>
+  </div>
+  <div class="card"><div class="filters">${['All','Buy','Hold','Sell','Most worrisome'].map(f=>`<button class="${f===filt?'on':''}" data-f="${f}">${f}</button>`).join('')}</div>
+  <div style="overflow-x:auto"><table><thead><tr>
+   <th data-k="symbol">Symbol</th><th data-k="shares" class="hide-sm">Shares</th><th data-k="value">Value</th><th data-k="pct">% Port</th><th data-k="day_pct">Day</th><th data-k="chg_3m" class="hide-sm">3 mo</th><th data-k="rating">Rating</th>
+  </tr></thead><tbody>${rows.map((r,i)=>`
+   <tr class="row" data-i="${i}"><td><b>${esc(r.symbol)}</b>${r.private?' <span class="mut">(private)</span>':''}<div class="mut">${esc(r.name).slice(0,28)}</div></td>
+   <td class="hide-sm">${r.shares==null?'—':fmt(r.shares,r.shares%1?3:0)}</td><td>${usd(r.value)}</td><td>${r.pct.toFixed(1)}%</td>
+   <td>${pc(r.day_pct)}</td><td class="hide-sm">${pc(r.chg_3m)}</td><td><span class="tag ${r.rating.split(' ')[0]}">${esc(r.rating)}</span></td></tr>
+   <tr class="det" data-d="${i}" hidden><td colspan="7"><div>${esc(r.reason)}</div>
+    <div class="mut" style="margin:6px 0">Price ${usd(r.price,2)} · Cost ${usd(r.cost)} · Gain ${r.gain==null?'—':usd(r.gain)} · 1 mo ${pc(r.chg_1m)} · 1 yr ${pc(r.chg_1y)}${r.pe?` · P/E ${r.pe.toFixed(1)}`:''}</div>
+    ${(r.news||[]).map(n=>`<a href="${esc(n.url)}" target="_blank" rel="noopener noreferrer">📰 ${esc(n.title)} <span class="mut">— ${esc(n.source)}</span></a>`).join('')||'<span class="mut">No recent news</span>'}
+   </td></tr>`).join('')}</tbody></table></div>
+  <div class="mut" style="margin-top:8px">Tap a row for the reason and news. ${esc(D.disclaimer)}</div></div>
+  <div style="text-align:center;margin:14px"><button style="width:auto;background:#262a33" onclick="sessionStorage.clear();location.reload()">Lock</button></div>`;
+  document.querySelectorAll('.filters button').forEach(b=>b.onclick=()=>{filt=b.dataset.f;render();});
+  document.querySelectorAll('th').forEach(t=>t.onclick=()=>{const k=t.dataset.k;sortDir=(sortK===k)?-sortDir:(k==='symbol'||k==='rating'?1:-1);sortK=k;render();});
+  document.querySelectorAll('tr.row').forEach(t=>t.onclick=()=>{const d=document.querySelector(`tr[data-d="${t.dataset.i}"]`);d.hidden=!d.hidden;});
+}
+</script></body></html>
